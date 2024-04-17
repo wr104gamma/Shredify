@@ -1,8 +1,10 @@
 #!/usr/bin/python3
 import tkinter as tk
 from tkinter import filedialog, messagebox
+from tkinter.ttk import Progressbar
 import subprocess
 import os
+import threading
 
 class FileExplorerApp:
     def __init__(self, root):
@@ -10,6 +12,11 @@ class FileExplorerApp:
         self.root.title("Shredify v1.0")
         self.root.geometry("400x300")
         
+        # Create a progress bar
+        self.progress_bar = Progressbar(root, orient=tk.HORIZONTAL, length=300, mode='determinate')
+        self.progress_bar.pack(pady=10)  # Or use grid or place to position it
+        self.progress_bar.pack_forget()  # Hide initially
+
         # Create menu
         self.menu_bar = tk.Menu(root)
         self.root.config(menu=self.menu_bar)
@@ -29,6 +36,12 @@ class FileExplorerApp:
         self.menu_bar.add_cascade(label="About", menu=self.about_menu)
         self.about_menu.add_command(label="Instructions", command=self.show_instructions)
         self.cascade_items.append(self.about_menu)  # Add to cascade items
+
+        # Import Drivescan menu
+        self.drivescan_menu = tk.Menu(self.menu_bar, tearoff=0)
+        self.menu_bar.add_cascade(label="Import Scan", menu=self.drivescan_menu)
+        self.drivescan_menu.add_command(label="Import drivescan", command=self.import_drivescan)
+        self.cascade_items.append(self.drivescan_menu)  # Add to cascade items
 
         # Shred menu (aligned to the right)
         self.shred_menu = tk.Menu(self.menu_bar, tearoff=0)
@@ -61,6 +74,24 @@ class FileExplorerApp:
         
         # Enable Ctrl-V for pasting
         self.root.bind("<Control-v>", self.paste_files)
+
+    def import_drivescan(self):
+        # Construct the path to the drivescan_results.txt file in the user's Documents folder
+        home_directory = os.path.expanduser("~")
+        drivescan_file_path = os.path.join(home_directory, "Documents", "drivescan_results.txt")
+
+        # Check if the file exists
+        if os.path.exists(drivescan_file_path):
+            # Read the contents of the file
+            with open(drivescan_file_path, "r") as f:
+                scan_results = f.readlines()
+
+            # Add scan results to the file listbox
+            for result in scan_results:
+                self.file_listbox.insert(tk.END, result.strip())
+        else:
+            # Display an error message if the file does not exist
+            messagebox.showerror("File Not Found", "The drivescan_results.txt file was not found in the Documents folder.")
 
     def add_files(self):
         # Open a file dialog to select files
@@ -117,6 +148,31 @@ class FileExplorerApp:
             for idx in reversed(selected_indices):  # Iterate in reverse order to avoid index shifting
                 self.file_listbox.delete(idx)
 
+    def shred_files(self, selected_indices):
+        total_files = len(selected_indices)
+        processed_files = 0
+        for idx in selected_indices:
+            file = self.file_listbox.get(idx)
+            # Exclude the instruction message from shredding
+            if file != "Paste your path/filename(s) Here":
+                command = f"sudo shred -v -n {self.passes_var.get()} -u -z '{file}'"
+                subprocess.run(command, shell=True, check=True,
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            processed_files += 1
+            progress_value = (processed_files / total_files) * 100
+            self.progress_bar['value'] = progress_value
+            self.root.update_idletasks()  # Update the GUI
+
+        # Remove shredded files from the listbox
+        self.remove_selected_files()
+        
+        # Display completion message
+        messagebox.showinfo("Shredding Completed", "All selected files have been shredded successfully.")
+        
+        # Reset progress bar to 0
+        self.progress_bar['value'] = 0
+
+    # In the shred_selected_files method, create a new thread for shredding
     def shred_selected_files(self):
         # Get the selected files
         selected_indices = self.file_listbox.curselection()
@@ -124,34 +180,16 @@ class FileExplorerApp:
             # Prompt the user once before shredding all files
             response = messagebox.askyesno("Confirm Shredding", "Are you sure you want to shred all selected files?")
             if response:
-                success_count = 0
-                failure_count = 0
-                files_to_delete = []  # List to store files to delete from the listbox
-                # Shred each selected file
-                for idx in selected_indices:
-                    file = self.file_listbox.get(idx)
-                    # Exclude the instruction message from shredding
-                    if file != "Paste your path/filename(s) Here":
-                        command = f"sudo shred -v -n {self.passes_var.get()} -z -u '{file}'"
-                        try:
-                            subprocess.run(command, shell=True, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                            success_count += 1
-                            files_to_delete.append(idx)  # Add the index to files_to_delete list
-                        except subprocess.CalledProcessError as e:
-                            failure_count += 1
-
-                # Remove the shredded files from the listbox
-                for idx in reversed(files_to_delete):  # Iterate in reverse order to avoid index shifting
-                    self.file_listbox.delete(idx)
-                # Display the result of the batch operation
-                if success_count > 0:
-                    messagebox.showinfo("Batch Shredding", f"Successfully shredded {success_count} file(s).")
-                if failure_count > 0:
-                    messagebox.showerror("Batch Shredding", f"Failed to shred {failure_count} file(s).")
+                # Show the progress bar
+                self.progress_bar.pack()
+                
+                # Start a new thread for shredding
+                shredding_thread = threading.Thread(target=self.shred_files, args=(selected_indices,))
+                shredding_thread.start()
         else:
             # Display a message if no files are selected
             messagebox.showwarning("No Files Selected", "Please select one or more files to shred.")
-
+    
     def paste_files(self, event=None):
         # Get the clipboard data
         clipboard_data = self.root.clipboard_get()
